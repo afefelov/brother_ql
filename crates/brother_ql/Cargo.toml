@@ -16,7 +16,7 @@ clap = { version = "4.5.53", optional = true, default-features = false, features
 ] }
 custom_debug = "0.6.2"
 image = "0.25.2"
-rusb = { version = "0.9", optional = true }
+rusb = { version = "0.9", optional = true, features = ["vendored"] }
 serde = { version = "1.0.210", features = ["derive"], optional = true }
 strum = { version = "0.28.0", features = ["derive"] }
 thiserror = "2.0.17"
@@ -28,6 +28,9 @@ typst-render = { version = "0.14.1", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.31.2", features = ["poll"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
 
 [features]
 serde = ["dep:serde"]

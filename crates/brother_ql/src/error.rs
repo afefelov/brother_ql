@@ -67,6 +67,10 @@ pub enum UsbError {
     #[error("Incomplete USB write occurred! Please report this issue!")]
     IncompleteWrite,
 
+    /// Native I/O error while communicating with the USB printer.
+    #[error("USB IO error: {0}")]
+    Io(#[from] std::io::Error),
+
     /// Wraps errors from the underlying rusb USB library, including:
     ///
     /// See [`rusb::Error`] for all possible error variants.

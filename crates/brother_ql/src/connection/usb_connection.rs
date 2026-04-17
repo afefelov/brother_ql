@@ -1,38 +1,49 @@
 //! USB connection support for Brother QL printers
 use std::time::Duration;
 
+#[cfg(not(target_os = "windows"))]
 use rusb::{Context, Device, DeviceHandle, UsbContext};
+#[cfg(target_os = "windows")]
+use std::{
+    fs::{File, OpenOptions},
+    io::{Read, Write},
+};
 use tracing::debug;
+#[cfg(target_os = "windows")]
+use winreg::{RegKey, enums::HKEY_LOCAL_MACHINE};
 
-use crate::{error::UsbError, printer::PrinterModel};
+use crate::{
+    error::{PrintError, UsbError},
+    printer::PrinterModel,
+    printjob::PrintJob,
+    status::{Phase, StatusType},
+};
 
 use super::{PrinterConnection, printer_connection::sealed::ConnectionImpl};
 
 const BROTHER_USB_VENDOR_ID: u16 = 0x04f9;
+#[cfg(target_os = "windows")]
+const WINDOWS_USB_MONITOR_PORTS_KEY: &str =
+    r"SYSTEM\CurrentControlSet\Control\Print\Monitors\USB Monitor\Ports";
+#[cfg(target_os = "windows")]
+const WINDOWS_BROTHER_DEVICE_PREFIX: &str = "USB\\VID_04F9&PID_";
+
+#[cfg(not(target_os = "windows"))]
+type UsbHandle = DeviceHandle<Context>;
+#[cfg(target_os = "windows")]
+type UsbHandle = File;
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone)]
+struct WindowsUsbPrinter {
+    device_id: String,
+    device_path: String,
+}
 
 /// USB connection parameters for a Brother QL printer
 ///
 /// Contains all necessary USB parameters to establish a connection,
 /// including vendor/product IDs, endpoints, and timeout settings.
-///
-/// # Creating Connection Info
-///
-/// Use [`from_model`](Self::from_model) for known printer models:
-/// ```no_run
-/// # use brother_ql::{connection::UsbConnectionInfo, printer::PrinterModel};
-/// let info = UsbConnectionInfo::from_model(PrinterModel::QL820NWB);
-/// ```
-///
-/// Or use [`discover`](Self::discover) to auto-detect:
-/// ```no_run
-/// # use brother_ql::connection::UsbConnectionInfo;
-/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// if let Some(info) = UsbConnectionInfo::discover()? {
-///     println!("Found printer!");
-/// }
-/// # Ok(())
-/// # }
-/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UsbConnectionInfo {
     /// USB vendor ID (typically 0x04f9 for Brother Industries, Ltd)
@@ -50,18 +61,7 @@ pub struct UsbConnectionInfo {
 }
 
 impl UsbConnectionInfo {
-    /// Create connection info from a printer model
-    ///
-    /// Returns the correct USB parameters (vendor ID, product ID, endpoints, etc.)
-    /// for the specified printer model. This is the recommended way to create
-    /// connection info for known printer models.
-    ///
-    /// # Example
-    /// ```no_run
-    /// # use brother_ql::{connection::UsbConnectionInfo, printer::PrinterModel};
-    /// // Create connection info for a specific model
-    /// let info = UsbConnectionInfo::from_model(PrinterModel::QL820NWB);
-    /// ```
+    /// Create connection info from a printer model.
     #[must_use]
     pub const fn from_model(model: PrinterModel) -> Self {
         Self {
@@ -76,46 +76,46 @@ impl UsbConnectionInfo {
 
     /// Find a connected printer and return its connection info.
     ///
-    /// Returns the correct USB parameters (vendor ID, product ID, endpoints, etc.)
-    /// for the first supported printer that's found. This is the recommended way to
-    /// create connection info if you do not care which printer model you have.
-    ///
     /// # Errors
-    /// Returns an error if any USB operations fail
+    /// Returns an error if USB enumeration fails.
     pub fn discover() -> Result<Option<Self>, UsbError> {
-        let context = Context::new()?;
-        let devices = context.devices()?;
-
-        for device in devices.iter() {
-            let descriptor = device.device_descriptor()?;
-            if descriptor.vendor_id() == BROTHER_USB_VENDOR_ID
-                && let Some(model) = PrinterModel::from_product_id(descriptor.product_id())
-            {
-                return Ok(Some(Self::from_model(model)));
+        #[cfg(target_os = "windows")]
+        {
+            for printer in enum_windows_usb_printers()? {
+                if let Some(product_id) = product_id_from_device_id(&printer.device_id)
+                    && let Some(model) = PrinterModel::from_product_id(product_id)
+                {
+                    return Ok(Some(Self::from_model(model)));
+                }
             }
+            return Ok(None);
         }
 
-        Ok(None)
+        #[cfg(not(target_os = "windows"))]
+        {
+            let context = Context::new()?;
+            let devices = context.devices()?;
+
+            for device in devices.iter() {
+                let descriptor = device.device_descriptor()?;
+                if descriptor.vendor_id() != BROTHER_USB_VENDOR_ID {
+                    continue;
+                }
+
+                if let Some(model) = PrinterModel::from_product_id(descriptor.product_id()) {
+                    return Ok(Some(Self::from_model(model)));
+                }
+            }
+
+            Ok(None)
+        }
     }
 }
 
-/// Active USB connection to a Brother QL printer
-///
-/// Manages the USB device handle and provides read/write operations.
-/// The connection automatically detaches and reattaches kernel drivers as needed.
-///
-/// Implements [`PrinterConnection`] trait for high-level printing operations.
-///
-/// # Cleanup
-///
-/// The USB interface is automatically released and the kernel driver reattached
-/// when the connection is dropped.
-///
-/// # Platform Support
-///
-/// Cross-platform via the `rusb` library. Requires the `usb` feature flag.
+/// Active USB connection to a Brother QL printer.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub struct UsbConnection {
-    handle: DeviceHandle<Context>,
+    handle: UsbHandle,
     interface: u8,
     timeout: Duration,
     endpoint_out: u8,
@@ -123,81 +123,79 @@ pub struct UsbConnection {
 }
 
 impl UsbConnection {
-    /// Open a USB connection to a Brother QL printer
-    ///
-    /// Searches for a USB device matching the vendor and product IDs in the connection info,
-    /// then claims the interface for exclusive access. The kernel driver is automatically
-    /// detached and will be reattached when the connection is closed.
+    /// Open a USB connection to a Brother QL printer.
     ///
     /// # Errors
-    /// Returns an error if:
-    /// - No USB device is found with the specified vendor/product ID
-    /// - The USB device cannot be opened
-    /// - The interface cannot be claimed
-    /// - USB configuration fails
-    ///
-    /// # Example
-    /// ```no_run
-    /// # use brother_ql::{
-    /// #     connection::{UsbConnection, UsbConnectionInfo},
-    /// #     printer::PrinterModel,
-    /// # };
-    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let info = UsbConnectionInfo::from_model(PrinterModel::QL820NWB);
-    /// let connection = UsbConnection::open(info)?;
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Returns an error if the printer cannot be opened for the current platform.
     pub fn open(info: UsbConnectionInfo) -> Result<Self, UsbError> {
-        debug!("Opening USB Connection to the printer...");
-        let context = Context::new()?;
-        let device = Self::find_device(&context, info.vendor_id, info.product_id)?;
-        let handle = device.open()?;
+        debug!("Opening USB connection to the printer...");
 
-        // Auto-detach and reattach kernel driver when supported by the platform.
-        match handle.set_auto_detach_kernel_driver(true) {
-            Ok(()) => {}
-            Err(rusb::Error::NotSupported) => {
-                debug!("Automatic kernel-driver detachment is not supported on this platform");
-            }
-            Err(e) => return Err(e.into()),
+        #[cfg(target_os = "windows")]
+        {
+            let device_path = find_windows_device_path(info.vendor_id, info.product_id)?;
+            let handle = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&device_path)?;
+
+            debug!("Successfully established USB connection via Windows USB monitor");
+            return Ok(Self {
+                handle,
+                interface: info.interface,
+                timeout: info.timeout,
+                endpoint_out: info.endpoint_out,
+                endpoint_in: info.endpoint_in,
+            });
         }
-        match handle.kernel_driver_active(info.interface) {
-            Ok(true) => match handle.detach_kernel_driver(info.interface) {
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let context = Context::new()?;
+            let device = Self::find_device(&context, info.vendor_id, info.product_id)?;
+            let handle = device.open()?;
+
+            match handle.set_auto_detach_kernel_driver(true) {
                 Ok(()) => {}
                 Err(rusb::Error::NotSupported) => {
-                    debug!("Kernel-driver detachment is not supported on this platform");
+                    debug!("Automatic kernel-driver detachment is not supported on this platform");
                 }
                 Err(e) => return Err(e.into()),
-            },
-            Ok(false) => {}
-            Err(rusb::Error::NotSupported) => {
-                debug!("Kernel-driver status detection is not supported on this platform");
             }
-            Err(e) => return Err(e.into()),
-        }
-        handle.set_active_configuration(1)?;
-        // Claim the interface for exclusive access
-        handle.claim_interface(info.interface)?;
+            match handle.kernel_driver_active(info.interface) {
+                Ok(true) => match handle.detach_kernel_driver(info.interface) {
+                    Ok(()) => {}
+                    Err(rusb::Error::NotSupported) => {
+                        debug!("Kernel-driver detachment is not supported on this platform");
+                    }
+                    Err(e) => return Err(e.into()),
+                },
+                Ok(false) => {}
+                Err(rusb::Error::NotSupported) => {
+                    debug!("Kernel-driver status detection is not supported on this platform");
+                }
+                Err(e) => return Err(e.into()),
+            }
+            handle.set_active_configuration(1)?;
+            handle.claim_interface(info.interface)?;
 
-        if let Err(e) = handle.set_alternate_setting(info.interface, 0) {
-            // NOTE: Since we handle the failed alternate setting call we
-            // propagate the original error instead of a possible cleanup one.
-            let _ = handle.release_interface(info.interface);
-            return Err(e.into());
-        }
+            if let Err(e) = handle.set_alternate_setting(info.interface, 0) {
+                let _ = handle.release_interface(info.interface);
+                return Err(e.into());
+            }
 
-        debug!("Successfully established USB Connection!");
-        Ok(Self {
-            handle,
-            interface: info.interface,
-            timeout: info.timeout,
-            endpoint_out: info.endpoint_out,
-            endpoint_in: info.endpoint_in,
-        })
+            debug!("Successfully established USB connection!");
+            Ok(Self {
+                handle,
+                interface: info.interface,
+                timeout: info.timeout,
+                endpoint_out: info.endpoint_out,
+                endpoint_in: info.endpoint_in,
+            })
+        }
     }
 
-    /// Find a USB device with the specified vendor and product IDs
+    /// Find a USB device with the specified vendor and product IDs.
+    #[cfg(not(target_os = "windows"))]
     fn find_device(
         context: &Context,
         vendor_id: u16,
@@ -219,34 +217,133 @@ impl UsbConnection {
     }
 }
 
-// Implement the public connection interface
-impl PrinterConnection for UsbConnection {}
+#[cfg(target_os = "windows")]
+fn enum_windows_usb_printers() -> Result<Vec<WindowsUsbPrinter>, UsbError> {
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let ports_key = hklm.open_subkey(WINDOWS_USB_MONITOR_PORTS_KEY)?;
+    let mut printers = Vec::new();
 
-// Implement the private connection interface
+    for port_name in ports_key.enum_keys().flatten() {
+        let port_key = match ports_key.open_subkey(&port_name) {
+            Ok(key) => key,
+            Err(_) => continue,
+        };
+        let device_id: String = match port_key.get_value("Device Id") {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if !device_id
+            .to_ascii_uppercase()
+            .starts_with(WINDOWS_BROTHER_DEVICE_PREFIX)
+        {
+            continue;
+        }
+        let device_path: String = match port_key.get_value("Device Path") {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        printers.push(WindowsUsbPrinter {
+            device_id,
+            device_path,
+        });
+    }
+
+    Ok(printers)
+}
+
+#[cfg(target_os = "windows")]
+fn product_id_from_device_id(device_id: &str) -> Option<u16> {
+    let normalized = device_id.to_ascii_uppercase();
+    let suffix = normalized.strip_prefix(WINDOWS_BROTHER_DEVICE_PREFIX)?;
+    let product_id = suffix.get(..4)?;
+    u16::from_str_radix(product_id, 16).ok()
+}
+
+#[cfg(target_os = "windows")]
+fn find_windows_device_path(vendor_id: u16, product_id: u16) -> Result<String, UsbError> {
+    for printer in enum_windows_usb_printers()? {
+        if product_id_from_device_id(&printer.device_id) == Some(product_id)
+            && printer
+                .device_id
+                .to_ascii_uppercase()
+                .starts_with(&format!("USB\\VID_{vendor_id:04X}&PID_{product_id:04X}"))
+        {
+            return Ok(printer.device_path);
+        }
+    }
+
+    Err(UsbError::DeviceNotFound {
+        vendor_id,
+        product_id,
+    })
+}
+
+impl PrinterConnection for UsbConnection {
+    #[cfg(target_os = "windows")]
+    fn print(&mut self, job: PrintJob) -> Result<(), PrintError<Self::Error>> {
+        let status = self
+            .get_status()
+            .map_err(PrintError::err_source_mapper(0))?;
+        <Self as ConnectionImpl>::validate_status(
+            &status,
+            job.media,
+            StatusType::StatusRequestReply,
+            Phase::Receiving,
+        )
+        .map_err(|e| PrintError::with_page(e, 0))?;
+
+        let compiled = job.compile();
+        self.write(&compiled)
+            .map_err(|e| PrintError::with_page(e, 1))?;
+
+        Ok(())
+    }
+}
+
 impl ConnectionImpl for UsbConnection {
     type Error = UsbError;
 
     fn write(&mut self, data: &[u8]) -> Result<(), Self::Error> {
-        let bytes_written = self
-            .handle
-            .write_bulk(self.endpoint_out, data, self.timeout)?;
-        if bytes_written != data.len() {
-            return Err(UsbError::IncompleteWrite);
+        #[cfg(target_os = "windows")]
+        {
+            self.handle.write_all(data)?;
+            self.handle.flush()?;
+            Ok(())
         }
-        Ok(())
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let bytes_written = self
+                .handle
+                .write_bulk(self.endpoint_out, data, self.timeout)?;
+            if bytes_written != data.len() {
+                return Err(UsbError::IncompleteWrite);
+            }
+            Ok(())
+        }
     }
 
     fn read(&mut self, buffer: &mut [u8]) -> Result<usize, Self::Error> {
-        let bytes_read = self
-            .handle
-            .read_bulk(self.endpoint_in, buffer, self.timeout)?;
-        Ok(bytes_read)
+        #[cfg(target_os = "windows")]
+        {
+            Ok(self.handle.read(buffer)?)
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let bytes_read = self
+                .handle
+                .read_bulk(self.endpoint_in, buffer, self.timeout)?;
+            Ok(bytes_read)
+        }
     }
 }
 
 impl Drop for UsbConnection {
     fn drop(&mut self) {
-        // Release the interface when connection is dropped
-        let _ = self.handle.release_interface(self.interface);
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = self.handle.release_interface(self.interface);
+        }
     }
 }
