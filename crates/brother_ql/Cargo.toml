@@ -16,7 +16,6 @@ clap = { version = "4.5.53", optional = true, default-features = false, features
 ] }
 custom_debug = "0.6.2"
 image = "0.25.2"
-nix = { version = "0.31.2", features = ["poll"] }
 rusb = { version = "0.9", optional = true }
 serde = { version = "1.0.210", features = ["derive"], optional = true }
 strum = { version = "0.28.0", features = ["derive"] }
@@ -26,6 +25,9 @@ tracing = "0.1.41"
 typst = { version = "0.14.1", optional = true }
 typst-kit = { version = "0.14.1", optional = true, features = ["embed-fonts"] }
 typst-render = { version = "0.14.1", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.31.2", features = ["poll"] }
 
 [features]
 serde = ["dep:serde"]

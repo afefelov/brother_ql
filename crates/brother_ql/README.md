@@ -31,7 +31,7 @@ cargo add brother_ql --features usb
 ```
 
 **Feature flags:**
-- `usb` - Enable USB printing support (requires `libusb`)
+- `usb` - Enable USB printing support (requires `libusb`; on Windows, use a libusb-compatible printer driver such as WinUSB)
 - `serde` - Enable serialization support
 
 ## Examples
@@ -71,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Printing via kernel connection
 
-**Note:** Works without any optional features. On Linux, you can use the kernel's USB printer driver (`/dev/usb/lp0`).
+**Note:** Works without any optional features. This connection type is Linux-only and uses the kernel's USB printer driver (`/dev/usb/lp0`). On Windows 10/11, use a USB connection instead.
 
 ```rust
 use brother_ql::{

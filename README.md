@@ -8,7 +8,12 @@ Rust tools for Brother QL series label printers. This project provides both a [R
 
 A Rust library to convert images to Brother QL raster command data and print labels directly via USB or kernel connections.
 
-**Features:** Image to raster conversion, USB printing with status monitoring, two-color printing support, 28+ media types
+**Platform support:**
+- **Windows 10 / 11**: supported via direct USB printing
+- **macOS**: supported via direct USB printing
+- **Linux**: supported via direct USB printing and kernel device paths such as `/dev/usb/lp0`
+
+**Features:** Image to raster conversion, cross-platform USB printing with status monitoring, two-color printing support, 28+ media types
 
 **Links:**
 - [README →](crates/brother_ql/README.md)

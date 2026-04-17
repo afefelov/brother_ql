@@ -13,6 +13,8 @@ $ brother-label print mylabel.png --media c62 --usb-auto-discover
 
 This will convert `mylabel.png` to raster command data, auto-discover the first connected USB printer and finally print your label.
 
+Direct USB printing works on Windows 10/11, macOS, and Linux. The `--fd` kernel-device mode is Linux-only.
+
 **Note:**
 - `c62` refers to continuous 62mm regular tape.
 - The dimensions of the supplied images need to match the media type
@@ -22,7 +24,7 @@ For more information on label roll types and required image dimensions look at t
 ## ✨ Features
 
 - **🔌 USB Auto-Discovery** - Automatically find and connect to Brother QL printers with zero configuration
-- **🖨️ Multiple Connection Types** - USB auto-discovery, specific model selection, or kernel driver (`/dev/usb/lp0`)
+- **🖨️ Multiple Connection Types** - USB auto-discovery and specific model selection on Windows/macOS/Linux, plus Linux kernel driver mode (`/dev/usb/lp0`)
 - **📝 Built-in Test Labels** - Generate test labels on-the-fly with Typst, no image files needed
 - **📏 28 Media Types Supported** - Continuous tape (12-62mm), die-cut labels, and two-color printing
 - **⚙️ Flexible Print Options** - Configure copies, cut behavior, quality, and high-dpi settings
@@ -49,6 +51,8 @@ $ brother-label print mylabel.png --media c62 --fd /dev/usb/lp0
 ```
 
 This prints via the Linux kernel USB printer driver instead of direct USB communication.
+
+**Note:** Kernel device paths are only supported on Linux. On Windows 10/11, use `--usb` or `--usb-auto-discover`.
 
 **Note:**
 The device path may vary (e.g., `/dev/usb/lp1`, `/dev/usb/lp2`) depending on your system and connected devices.

@@ -8,7 +8,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 #[command(
     version,
     about = "Brother QL label printer CLI",
-    long_about = "A command-line interface for printing labels and managing Brother QL series label printers.\n\nSupports printing via USB connection, kernel device drivers, and reading printer status."
+    long_about = "A command-line interface for printing labels and managing Brother QL series label printers.\n\nSupports direct USB printing on Windows, macOS, and Linux, plus Linux kernel device drivers and printer status inspection."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -40,7 +40,7 @@ pub struct PrinterSelection {
         short,
         long,
         value_name = "DEVICE",
-        help = "Connect via kernel device driver (e.g., /dev/usb/lp0)"
+        help = "Connect via Linux kernel device driver (e.g., /dev/usb/lp0)"
     )]
     pub fd: Option<PathBuf>,
 }

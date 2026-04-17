@@ -154,10 +154,27 @@ impl UsbConnection {
         let device = Self::find_device(&context, info.vendor_id, info.product_id)?;
         let handle = device.open()?;
 
-        // Auto-detach and reattach kernel driver when claiming/releasing
-        handle.set_auto_detach_kernel_driver(true)?;
-        if handle.kernel_driver_active(0)? {
-            handle.detach_kernel_driver(0)?;
+        // Auto-detach and reattach kernel driver when supported by the platform.
+        match handle.set_auto_detach_kernel_driver(true) {
+            Ok(()) => {}
+            Err(rusb::Error::NotSupported) => {
+                debug!("Automatic kernel-driver detachment is not supported on this platform");
+            }
+            Err(e) => return Err(e.into()),
+        }
+        match handle.kernel_driver_active(info.interface) {
+            Ok(true) => match handle.detach_kernel_driver(info.interface) {
+                Ok(()) => {}
+                Err(rusb::Error::NotSupported) => {
+                    debug!("Kernel-driver detachment is not supported on this platform");
+                }
+                Err(e) => return Err(e.into()),
+            },
+            Ok(false) => {}
+            Err(rusb::Error::NotSupported) => {
+                debug!("Kernel-driver status detection is not supported on this platform");
+            }
+            Err(e) => return Err(e.into()),
         }
         handle.set_active_configuration(1)?;
         // Claim the interface for exclusive access

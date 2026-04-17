@@ -6,7 +6,7 @@
 //! # Connection Types
 //!
 //! - [`UsbConnection`] - Direct USB communication (requires `usb` feature)
-//! - [`KernelConnection`] - Uses Linux kernel USB printer driver (no features required)
+//! - [`KernelConnection`] - Uses the Linux kernel USB printer driver (returns an error on non-Linux platforms)
 //!
 //! All connection types implement the [`PrinterConnection`] trait, which provides
 //! high-level methods like [`print()`](PrinterConnection::print) and
@@ -23,6 +23,8 @@
 //! - You're on Linux and want minimal dependencies
 //! - The kernel USB printer driver (`usblp`) is already loaded
 //! - You want to avoid external USB library dependencies
+//!
+//! On Windows 10/11 and other non-Linux platforms, use [`UsbConnection`] instead.
 //!
 //! # Future
 //!

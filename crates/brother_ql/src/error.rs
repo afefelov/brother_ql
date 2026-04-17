@@ -93,6 +93,10 @@ pub enum KernelError {
     /// Kernel operation timeout
     #[error("Kernel IO operation timed out")]
     KernelIOTimeout,
+
+    /// Kernel device connections are not available on this platform
+    #[error("Kernel device connections are only supported on Linux")]
+    UnsupportedPlatform,
 }
 
 impl ConnectionError for KernelError {}
